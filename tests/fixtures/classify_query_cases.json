@@ -1,0 +1,74 @@
+[
+  {
+    "id": "zh-discovery-flow-matching",
+    "query": "流匹配有哪些代表性论文？请按时间线介绍。",
+    "expected_route": "research",
+    "expected_task_type": "literature_discovery"
+  },
+  {
+    "id": "en-discovery-diffusion",
+    "query": "What are the foundational papers on diffusion models?",
+    "expected_route": "research",
+    "expected_task_type": "literature_discovery"
+  },
+  {
+    "id": "zh-question-method",
+    "query": "为什么 flow matching 可以避免扩散模型中的数值积分误差？",
+    "expected_route": "research",
+    "expected_task_type": "literature_question"
+  },
+  {
+    "id": "zh-comparison",
+    "query": "比较 Flow Matching for Generative Modeling 和 Rectified Flow 的训练目标。",
+    "expected_route": "research",
+    "expected_task_type": "paper_comparison"
+  },
+  {
+    "id": "zh-analysis-active-paper",
+    "query": "解释我当前打开的这篇论文中 3.2 节的损失函数。",
+    "expected_route": "research",
+    "expected_task_type": "paper_analysis"
+  },
+  {
+    "id": "zh-follow-up",
+    "query": "基于刚才列出的第二篇，再说明它和第一篇的核心区别。",
+    "expected_route": "research",
+    "expected_task_type": "follow_up"
+  },
+  {
+    "id": "zh-import-arxiv",
+    "query": "导入 arXiv:2210.02747 到我的文献库。",
+    "expected_route": "direct_import",
+    "expected_task_type": "paper_import"
+  },
+  {
+    "id": "en-import-doi",
+    "query": "Import the paper with DOI 10.48550/arXiv.2210.02747.",
+    "expected_route": "direct_import",
+    "expected_task_type": "paper_import"
+  },
+  {
+    "id": "zh-import-url",
+    "query": "请导入 https://arxiv.org/abs/2210.02747 这篇论文。",
+    "expected_route": "direct_import",
+    "expected_task_type": "paper_import"
+  },
+  {
+    "id": "zh-clarify-topic",
+    "query": "帮我找一下那篇很有名的论文。",
+    "expected_route": "needs_clarification",
+    "expected_task_type": "other"
+  },
+  {
+    "id": "zh-clarify-pronoun",
+    "query": "它的实验设置是什么？",
+    "expected_route": "needs_clarification",
+    "expected_task_type": "other"
+  },
+  {
+    "id": "zh-out-of-scope",
+    "query": "帮我订一张去北京的机票。",
+    "expected_route": "out_of_scope",
+    "expected_task_type": "other"
+  }
+]

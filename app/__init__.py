@@ -1,0 +1,1 @@
+"""Paper Assistant application package."""
