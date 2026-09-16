@@ -127,3 +127,17 @@ class ArxivSearchPlan(BaseModel):
     rationale: str = Field(min_length=1, max_length=2_000)
     categories: list[str] = Field(default_factory=list, max_length=5)
     max_results: int = Field(default=10, ge=1, le=30)
+
+
+class ArxivCandidate(BaseModel):
+    """Normalized paper metadata returned by the arXiv search tool."""
+
+    arxiv_id: str = Field(min_length=1, max_length=128)
+    title: str = Field(min_length=1, max_length=2_000)
+    authors: list[str] = Field(min_length=1, max_length=100)
+    abstract: str = Field(min_length=1, max_length=20_000)
+    categories: list[str] = Field(default_factory=list, max_length=30)
+    published_at: datetime
+    updated_at: datetime
+    abs_url: str = Field(min_length=1, max_length=2_000)
+    pdf_url: str = Field(min_length=1, max_length=2_000)
