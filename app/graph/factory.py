@@ -15,10 +15,12 @@ from app.graph.nodes.classify_query import create_classify_query_node
 from app.graph.nodes.contracts import ResearchNode, ResearchNodes, create_placeholder_nodes
 from app.graph.nodes.request_search_approval import request_search_approval
 from app.graph.nodes.retrieve_local import create_retrieve_local_node
+from app.graph.nodes.search_arxiv import create_search_arxiv_node
 from app.graph.research_graph import build_research_graph
 from app.llm.embeddings import create_dashscope_embeddings
 from app.llm.minimax import create_minimax_chat_model
 from app.repositories.chroma_store import ChromaStore
+from app.services.arxiv_search import ArxivSearchClient, create_search_arxiv_tool
 from app.services.local_retrieval import LocalEvidenceRetriever
 
 
@@ -29,6 +31,7 @@ def compose_research_nodes(
     assess_coverage: ResearchNode,
     request_search_approval: ResearchNode,
     build_arxiv_query: ResearchNode,
+    search_arxiv: ResearchNode,
 ) -> ResearchNodes:
     """Replace only completed nodes while preserving explicit placeholders."""
     return replace(
@@ -38,6 +41,7 @@ def compose_research_nodes(
         assess_coverage=assess_coverage,
         request_search_approval=request_search_approval,
         build_arxiv_query=build_arxiv_query,
+        search_arxiv=search_arxiv,
     )
 
 
@@ -50,6 +54,7 @@ def build_research_nodes(settings: Settings) -> ResearchNodes:
     assess_coverage = create_assess_coverage_node(coverage_agent)
     arxiv_query_agent = build_arxiv_query_agent(minimax_model)
     build_arxiv_query = create_build_arxiv_query_node(arxiv_query_agent)
+    search_arxiv = create_search_arxiv_node(create_search_arxiv_tool(ArxivSearchClient()))
     vector_store = ChromaStore(settings).as_langchain_vector_store(create_dashscope_embeddings(settings))
     retrieve_local = create_retrieve_local_node(LocalEvidenceRetriever(vector_store))
     return compose_research_nodes(
@@ -58,6 +63,7 @@ def build_research_nodes(settings: Settings) -> ResearchNodes:
         assess_coverage=assess_coverage,
         request_search_approval=request_search_approval,
         build_arxiv_query=build_arxiv_query,
+        search_arxiv=search_arxiv,
     )
 
 

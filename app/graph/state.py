@@ -24,6 +24,7 @@ class ResearchState(TypedDict):
     arxiv_query: NotRequired[str]
     arxiv_search_plan: NotRequired[dict[str, object]]
     arxiv_candidates: NotRequired[list[dict[str, object]]]
+    arxiv_search_stats: NotRequired[dict[str, object]]
     import_approval: NotRequired[Literal["selected", "skipped"]]
     selected_paper_ids: NotRequired[list[str]]
     imported_paper_ids: NotRequired[list[str]]
