@@ -43,7 +43,7 @@ def approved_search_state() -> dict[str, object]:
 @pytest.mark.asyncio
 async def test_build_arxiv_query_returns_typed_plan_after_approval() -> None:
     plan = ArxivSearchPlan(
-        query='all:"flow matching" AND (cat:cs.LG OR cat:stat.ML)',
+        keywords=["flow matching", "generative modeling"],
         rationale="检索生成建模中的流匹配代表作。",
         categories=["cs.LG", "stat.ML"],
         max_results=12,
@@ -55,7 +55,7 @@ async def test_build_arxiv_query_returns_typed_plan_after_approval() -> None:
 
     update = await node(cast(Any, approved_search_state()))
 
-    assert update["arxiv_query"] == plan.query
+    assert update["arxiv_query"] == "flow matching, generative modeling"
     assert update["arxiv_search_plan"] == plan.model_dump()
     assert update["status"] == "arxiv_query_planned"
 

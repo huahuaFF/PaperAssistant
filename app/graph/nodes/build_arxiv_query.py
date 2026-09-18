@@ -30,7 +30,7 @@ def create_build_arxiv_query_node(
         if not isinstance(plan, ArxivSearchPlan):
             raise TypeError("arxiv_query_planner did not return an ArxivSearchPlan structured response.")
         return {
-            "arxiv_query": plan.query,
+            "arxiv_query": ", ".join(plan.keywords),
             "arxiv_search_plan": plan.model_dump(),
             "status": "arxiv_query_planned",
             "prompt_version": ARXIV_QUERY_PROMPT_VERSION,
