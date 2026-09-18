@@ -24,7 +24,7 @@ def create_search_arxiv_node(
             raise TypeError("search_arxiv requires arxiv_search_plan from build_arxiv_query.")
         plan = ArxivSearchPlan.model_validate(plan_data)
         tool_result = await search_tool.ainvoke(
-            {"query": plan.query, "categories": plan.categories, "max_results": plan.max_results}
+            {"keywords": plan.keywords, "categories": plan.categories, "max_results": plan.max_results}
         )
         if not isinstance(tool_result, list):
             raise TypeError("search_arxiv tool must return a list of candidate dictionaries.")

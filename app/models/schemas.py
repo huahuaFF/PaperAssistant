@@ -123,7 +123,7 @@ class SearchApprovalResume(BaseModel):
 
 
 class ArxivSearchPlan(BaseModel):
-    query: str = Field(min_length=1, max_length=1_000)
+    keywords: list[str] = Field(min_length=1, max_length=6)
     rationale: str = Field(min_length=1, max_length=2_000)
     categories: list[str] = Field(default_factory=list, max_length=5)
     max_results: int = Field(default=10, ge=1, le=30)
@@ -141,3 +141,61 @@ class ArxivCandidate(BaseModel):
     updated_at: datetime
     abs_url: str = Field(min_length=1, max_length=2_000)
     pdf_url: str = Field(min_length=1, max_length=2_000)
+
+
+class ImportApprovalCandidate(BaseModel):
+    """A user-selectable import target with a stable, workflow-local identifier."""
+
+    paper_id: str = Field(min_length=1, max_length=2_500)
+    source_type: Literal["arxiv", "doi", "url"]
+    source_url: str = Field(min_length=1, max_length=2_000)
+    title: str | None = Field(default=None, max_length=2_000)
+    authors: list[str] = Field(default_factory=list, max_length=100)
+    abstract: str | None = Field(default=None, max_length=20_000)
+    categories: list[str] = Field(default_factory=list, max_length=30)
+
+
+class ImportApprovalRequest(BaseModel):
+    """JSON-serializable payload shown before any paper download or ingestion."""
+
+    approval_type: Literal["import_papers"] = "import_papers"
+    source: Literal["arxiv_search", "direct_import"]
+    query: str
+    candidates: list[ImportApprovalCandidate] = Field(max_length=30)
+
+
+class ImportApprovalResume(BaseModel):
+    """Validated human response supplied through ``Command(resume=...)``."""
+
+    decision: Literal["select", "skip"]
+    selected_paper_ids: list[str] = Field(default_factory=list, max_length=30)
+
+    @model_validator(mode="after")
+    def validate_selected_ids_match_decision(self) -> ImportApprovalResume:
+        if self.decision == "select" and not self.selected_paper_ids:
+            raise ValueError("Selecting papers requires at least one paper ID.")
+        if self.decision == "skip" and self.selected_paper_ids:
+            raise ValueError("Skipping import cannot include selected paper IDs.")
+        return self
+
+
+class GroundedClaim(BaseModel):
+    """A narrow claim paired with a verbatim quotation from its evidence chunk."""
+
+    statement: str = Field(min_length=1, max_length=2_000)
+    evidence_id: str = Field(min_length=1)
+    supporting_quote: str = Field(min_length=8, max_length=600)
+
+
+class ReportSection(BaseModel):
+    """A thematic group of individually verifiable report claims."""
+
+    heading: str = Field(min_length=1, max_length=300)
+    claims: list[GroundedClaim] = Field(min_length=1, max_length=4)
+
+
+class GroundedReportDraft(BaseModel):
+    """Structured report content before the workflow renders citation labels."""
+
+    sections: list[ReportSection] = Field(min_length=1, max_length=6)
+    limitations: list[str] = Field(default_factory=list, max_length=6)

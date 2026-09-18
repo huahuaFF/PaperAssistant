@@ -69,15 +69,28 @@ out_of_scope         → explain_out_of_scope
 
 ## 已完成：`retrieve_local`
 
-这是确定性 RAG 节点，不是 Agent，不使用 MiniMax。它将原始问题、`intent.topic`、去重后的 `key_concepts` 与已引用论文 ID 组合为透明的 embedding query，然后通过 LangChain Chroma 的带相关性分数检索接口获取候选 chunk。
+这是确定性 RAG 节点，不是 Agent，不使用 MiniMax。它固定使用原始用户问题作为 embedding query，避免分类 Agent 的可变关键词改变首次召回；然后通过 LangChain Chroma 的带相关性分数检索接口获取候选 chunk。
 
-- 取最多 12 个候选，相关性阈值为 `0.35`；每篇论文最多保留 2 个 chunk。
+- 取最多 12 个候选；分数只用于排序，不采用固定绝对阈值；每篇论文最多保留 2 个 chunk。
+- 对用户明确写出的英文模型名、论文 ID 等实体，标题或正文中的精确命中优先排序。
 - 每个入选结果必须有 `paper_id`、`chunk_id`、`title`，可选 `page_number`；缺少引用溯源数据会显式失败。
 - 空库或没有达到阈值的结果返回空 `local_evidence`，后续 `assess_coverage` 负责决定是否请求 arXiv 搜索权限。
 
-## 进行中：`ingest_papers`
+## 已完成：`request_import_approval`
 
-已完成 PDF 解析、版面块排序、清洗、章节识别和页内 token 分块，结果先写入 `data/parsed/` 供人工检查。DashScope 批量 embedding、Chroma 幂等 upsert、SQLite 导入状态机与该图节点接线仍是下一阶段，未经人工检查的 parsed artifact 不会进入向量库。
+该节点是下载与向量化之前的第二个人工关卡。它对 arXiv 搜索结果生成可展示的候选论文 payload，使用 LangGraph `interrupt()` 暂停；调用方以相同 `thread_id` 通过 `Command(resume={"decision": "select", "selected_paper_ids": [...]})` 或 `{"decision": "skip"}` 恢复。选择的 ID 必须出现在中断 payload 中，无法从恢复请求伪造额外导入目标。直接导入请求中的 arXiv ID、DOI 和 URL 也会先统一为候选项，再要求确认。
+
+## 已完成：`ingest_papers`（arXiv PDF 主路径）
+
+节点只接受已通过 `request_import_approval` 选中的 arXiv ID。它以原子 `.part` 文件下载 PDF，限制文件大小，复用合法的本地下载；再复用既有的版面解析、章节分块、DashScope embedding 与 Chroma 稳定 chunk ID upsert。SQLite 保存每次导入任务的 `started`、`completed` 或 `failed` 状态，以及论文和版本元数据；失败后重新执行可安全覆盖同一篇论文的向量。DOI 与普通 URL 已能经过人工审批，但尚未实现可靠 PDF 解析器，因此会明确拒绝自动下载而非猜测文件地址。
+
+## 已完成：`retrieve_augmented_library`
+
+新论文写入 Chroma 后，节点先按 `paper_id` metadata filter 检索本次导入的论文，再检索整个库，并按 chunk ID 去重合并。最终证据优先保留新论文的高相关 chunk，同时补充已有本地文献；输出 `final_evidence`、引用 ID、新论文命中 ID 与完整检索统计，供 `generate_report` 使用。
+
+## 已完成：`generate_report`
+
+报告生成使用没有工具权限的结构化 LangChain Agent。每条主张必须返回已给定的 `evidence_id`，以及从该 evidence excerpt 逐字复制的 `supporting_quote`；工作流校验证据 ID 与逐字摘录后，才统一渲染论文标题、章节和页码。若 Agent 引用了不存在的 chunk 或杜撰摘录，节点会失败而不会输出不可溯源的报告。未经历导入的“本地证据充分”路径会回退使用 `local_evidence`。
 
 ## 已完成：`assess_coverage`
 
@@ -89,7 +102,16 @@ out_of_scope         → explain_out_of_scope
 
 ## 已完成：`build_arxiv_query`
 
-该 Agent 节点必须先验证 `search_approval == "approved"`，再根据 `QueryIntent` 与 `CoverageAssessment` 输出结构化 `ArxivSearchPlan`。它只生成可复现的 arXiv API 查询表达式、分类、理由与结果上限；不执行网络请求。
+该 Agent 节点必须先验证 `search_approval == "approved"`，再根据 `QueryIntent` 与 `CoverageAssessment` 输出结构化关键词、分类、理由与结果上限；不执行网络请求。确定性工具层使用 `arxiv.py` 构造 API 表达式并完成请求、分页和 Atom 解析，Agent 不生成 arXiv DSL。
+
+## 已完成：四个终止分支
+
+- `request_clarification`：返回分类 Agent 已结构化给出的澄清问题。
+- `explain_out_of_scope`：明确说明能力边界，不假装完成科研检索。
+- `explain_knowledge_gap`：当用户拒绝 arXiv 搜索时，基于 coverage 结果说明本地证据缺口。
+- `report_candidates`：当用户跳过导入时，只汇报本轮 arXiv 候选的标题、ID 与链接，不执行下载或向量化。
+
+四者均为确定性终止节点，无模型调用、无外部写入；至此主图中的全部节点均已有实际实现。
 
 ## 路由不变量
 

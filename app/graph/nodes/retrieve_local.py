@@ -7,7 +7,11 @@ from collections.abc import Awaitable, Callable
 from app.graph.nodes.contracts import NodeUpdate
 from app.graph.state import ResearchState
 from app.models.schemas import QueryIntent
-from app.services.local_retrieval import LocalEvidenceRetriever, build_retrieval_query
+from app.services.local_retrieval import (
+    LocalEvidenceRetriever,
+    build_retrieval_query,
+    extract_retrieval_anchors,
+)
 
 
 def create_retrieve_local_node(
@@ -21,7 +25,7 @@ def create_retrieve_local_node(
             raise TypeError("retrieve_local requires intent from classify_query.")
         intent = QueryIntent.model_validate(intent_data)
         query = build_retrieval_query(user_query=state["user_query"], intent=intent)
-        result = await retriever.retrieve(query)
+        result = await retriever.retrieve(query, exact_anchors=extract_retrieval_anchors(state["user_query"]))
         evidence = [item.model_dump() for item in result.evidence]
         return {
             "retrieval_query": result.query,

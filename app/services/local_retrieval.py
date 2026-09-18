@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -17,7 +18,12 @@ class SimilaritySearchStore(Protocol):
     """The scored LangChain vector-store operation needed by local retrieval."""
 
     def similarity_search_with_relevance_scores(
-        self, query: str, *, k: int, score_threshold: float
+        self,
+        query: str,
+        *,
+        k: int,
+        score_threshold: float | None,
+        filter: dict[str, object] | None = None,
     ) -> list[tuple[Document, float]]: ...
 
 
@@ -34,14 +40,26 @@ class RetrievalResult:
 
 
 def build_retrieval_query(*, user_query: str, intent: QueryIntent) -> str:
-    """Build a transparent embedding query without a second LLM call."""
-    parts = [user_query.strip(), f"主题: {intent.topic.strip()}"]
-    concepts = [concept.strip() for concept in intent.key_concepts if concept.strip()]
-    if concepts:
-        parts.append(f"关键词: {', '.join(dict.fromkeys(concepts))}")
-    if intent.referenced_paper_ids:
-        parts.append(f"已引用论文: {', '.join(intent.referenced_paper_ids)}")
-    return "\n".join(part for part in parts if part)
+    """Return the stable first-pass query used for local evidence retrieval.
+
+    ``QueryIntent`` is deliberately not used to expand the embedding query:
+    structured LLM classification can produce equivalent, but non-identical,
+    concepts on separate runs. Routing may be probabilistic; the initial RAG
+    lookup must not be.  The parameter remains part of the public contract so
+    callers still validate that classification completed before retrieval.
+    """
+    del intent
+    return user_query.strip()
+
+
+_EXACT_RETRIEVAL_ANCHOR = re.compile(
+    r"(?<![A-Za-z0-9])(?=[A-Za-z0-9_-]*[A-Z0-9])[A-Za-z][A-Za-z0-9_-]{2,}(?![A-Za-z0-9])"
+)
+
+
+def extract_retrieval_anchors(user_query: str) -> list[str]:
+    """Extract explicit model/paper identifiers for a guarded recall fallback."""
+    return list(dict.fromkeys(match.group(0) for match in _EXACT_RETRIEVAL_ANCHOR.finditer(user_query)))
 
 
 class LocalEvidenceRetriever:
@@ -52,24 +70,37 @@ class LocalEvidenceRetriever:
         vector_store: SimilaritySearchStore,
         *,
         candidate_k: int = 12,
-        score_threshold: float = 0.35,
         max_chunks_per_paper: int = 2,
         excerpt_max_characters: int = 1_200,
     ) -> None:
         self._vector_store = vector_store
         self._candidate_k = candidate_k
-        self._score_threshold = score_threshold
         self._max_chunks_per_paper = max_chunks_per_paper
         self._excerpt_max_characters = excerpt_max_characters
 
-    async def retrieve(self, query: str) -> RetrievalResult:
-        candidates = await asyncio.to_thread(
-            self._vector_store.similarity_search_with_relevance_scores,
-            query,
-            k=self._candidate_k,
-            score_threshold=self._score_threshold,
-        )
-        evidence = self._select_evidence(candidates)
+    async def retrieve(
+        self,
+        query: str,
+        *,
+        metadata_filter: dict[str, object] | None = None,
+        exact_anchors: Sequence[str] = (),
+    ) -> RetrievalResult:
+        if metadata_filter is not None:
+            candidates = await asyncio.to_thread(
+                self._vector_store.similarity_search_with_relevance_scores,
+                query,
+                k=self._candidate_k,
+                score_threshold=None,
+                filter=metadata_filter,
+            )
+        else:
+            candidates = await asyncio.to_thread(
+                self._vector_store.similarity_search_with_relevance_scores,
+                query,
+                k=self._candidate_k,
+                score_threshold=None,
+            )
+        evidence = self._select_evidence(candidates, exact_anchors=exact_anchors)
         return RetrievalResult(
             query=query,
             evidence=evidence,
@@ -77,13 +108,24 @@ class LocalEvidenceRetriever:
             unique_paper_count=len({item.paper_id for item in evidence}),
         )
 
-    def _select_evidence(self, candidates: Sequence[tuple[Document, float]]) -> list[EvidenceItem]:
+    def _select_evidence(
+        self, candidates: Sequence[tuple[Document, float]], *, exact_anchors: Sequence[str] = ()
+    ) -> list[EvidenceItem]:
+        # Vector scores are model- and collection-dependent.  They determine
+        # rank only; a fixed value must not silently decide whether the user
+        # sees a local answer or an arXiv-approval branch.
+        ranked_candidates = sorted(
+            candidates,
+            key=lambda candidate: (
+                self._document_matches_exact_anchor(candidate[0], exact_anchors),
+                candidate[1],
+            ),
+            reverse=True,
+        )
         per_paper_count: defaultdict[str, int] = defaultdict(int)
         selected_chunk_ids: set[str] = set()
         evidence: list[EvidenceItem] = []
-        for document, score in candidates:
-            if score < self._score_threshold:
-                continue
+        for document, score in ranked_candidates:
             item = self._to_evidence(document, score)
             if item.chunk_id in selected_chunk_ids:
                 continue
@@ -93,6 +135,18 @@ class LocalEvidenceRetriever:
             per_paper_count[item.paper_id] += 1
             evidence.append(item)
         return evidence
+
+    def _document_matches_exact_anchor(
+        self, document: Document, exact_anchors: Sequence[str]
+    ) -> bool:
+        """Prioritize documents that explicitly name a queried model or paper."""
+        if not exact_anchors:
+            return False
+        title = document.metadata.get("title")
+        searchable_text = "\n".join(
+            value for value in (title, _source_excerpt(document)) if isinstance(value, str)
+        ).casefold()
+        return any(anchor.casefold() in searchable_text for anchor in exact_anchors)
 
     def _to_evidence(self, document: Document, score: float) -> EvidenceItem:
         metadata = document.metadata

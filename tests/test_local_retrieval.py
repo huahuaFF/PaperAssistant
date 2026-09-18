@@ -7,6 +7,7 @@ from app.services.local_retrieval import (
     LocalEvidenceRetriever,
     RetrievalDataError,
     build_retrieval_query,
+    extract_retrieval_anchors,
 )
 
 
@@ -16,7 +17,12 @@ class FakeVectorStore:
         self.calls: list[tuple[str, int, float]] = []
 
     def similarity_search_with_relevance_scores(
-        self, query: str, *, k: int, score_threshold: float
+        self,
+        query: str,
+        *,
+        k: int,
+        score_threshold: float | None,
+        filter: dict[str, object] | None = None,
     ) -> list[tuple[Document, float]]:
         self.calls.append((query, k, score_threshold))
         return self.candidates
@@ -36,7 +42,7 @@ def document(*, paper_id: str, chunk_id: str, score_text: str, page_number: int 
     )
 
 
-def test_retrieval_query_is_deterministic_and_deduplicates_concepts() -> None:
+def test_retrieval_query_uses_only_the_original_user_request() -> None:
     intent = QueryIntent(
         route="research",
         task_type="literature_discovery",
@@ -48,14 +54,15 @@ def test_retrieval_query_is_deterministic_and_deduplicates_concepts() -> None:
 
     query = build_retrieval_query(user_query="代表性论文有哪些？", intent=intent)
 
-    assert query == (
-        "代表性论文有哪些？\n主题: Flow Matching\n"
-        "关键词: flow matching, generative modeling\n已引用论文: paper-1"
-    )
+    assert query == "代表性论文有哪些？"
+
+
+def test_retrieval_anchors_keep_explicit_model_identifiers() -> None:
+    assert extract_retrieval_anchors("FlowCF 和 DDPM 的区别？") == ["FlowCF", "DDPM"]
 
 
 @pytest.mark.asyncio
-async def test_retriever_filters_low_scores_deduplicates_chunks_and_caps_per_paper() -> None:
+async def test_retriever_keeps_top_k_candidates_deduplicates_chunks_and_caps_per_paper() -> None:
     store = FakeVectorStore(
         [
             (document(paper_id="paper-a", chunk_id="a-1", score_text="first"), 0.95),
@@ -66,12 +73,12 @@ async def test_retriever_filters_low_scores_deduplicates_chunks_and_caps_per_pap
             (document(paper_id="paper-c", chunk_id="c-1", score_text="too low"), 0.20),
         ]
     )
-    result = await LocalEvidenceRetriever(store, score_threshold=0.35).retrieve("flow matching")
+    result = await LocalEvidenceRetriever(store).retrieve("flow matching")
 
-    assert [item.chunk_id for item in result.evidence] == ["a-1", "a-2", "b-1"]
+    assert [item.chunk_id for item in result.evidence] == ["a-1", "a-2", "b-1", "c-1"]
     assert result.candidate_count == 6
-    assert result.unique_paper_count == 2
-    assert store.calls == [("flow matching", 12, 0.35)]
+    assert result.unique_paper_count == 3
+    assert store.calls == [("flow matching", 12, None)]
     assert result.evidence[0].section == "Method"
     assert result.evidence[0].excerpt == "Raw source for a-1"
 
@@ -112,3 +119,19 @@ def test_retriever_rejects_chunks_without_citation_provenance() -> None:
 
     with pytest.raises(RetrievalDataError, match="paper_id"):
         LocalEvidenceRetriever(store)._select_evidence(store.candidates)
+
+
+@pytest.mark.asyncio
+async def test_retriever_prioritizes_evidence_with_an_explicit_identifier_match() -> None:
+    store = FakeVectorStore(
+        [
+            (document(paper_id="other", chunk_id="other-1", score_text="unrelated"), 0.95),
+            (document(paper_id="flowcf", chunk_id="flowcf-1", score_text="FlowCF details"), 0.28),
+        ]
+    )
+
+    result = await LocalEvidenceRetriever(store).retrieve(
+        "FlowCF 是什么？", exact_anchors=extract_retrieval_anchors("FlowCF 是什么？")
+    )
+
+    assert [item.chunk_id for item in result.evidence] == ["flowcf-1", "other-1"]

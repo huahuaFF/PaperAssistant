@@ -79,6 +79,8 @@ async def test_coverage_node_returns_typed_agent_assessment() -> None:
     assert update["status"] == "coverage_assessed"
 
 
+
+
 def test_coverage_context_bounds_evidence_excerpts() -> None:
     context = CoverageContextBuilder().build(
         {

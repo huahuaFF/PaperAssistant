@@ -1,36 +1,45 @@
 from __future__ import annotations
 
-from typing import Any, cast
+from datetime import datetime, timezone
+from typing import Any, Iterator, cast
 
-import httpx
+import arxiv
 import pytest
 from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import BaseTool
 
 from app.graph.nodes.search_arxiv import create_search_arxiv_node
 from app.models.schemas import ArxivCandidate, ArxivSearchPlan
-from app.services.arxiv_search import ArxivSearchClient, create_search_arxiv_tool
+from app.services.arxiv_search import ArxivSearchClient, build_arxiv_library_query, create_search_arxiv_tool
 
-ARXIV_FEED = """<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
-  <opensearch:totalResults>1</opensearch:totalResults>
-  <entry>
-    <id>http://arxiv.org/abs/2210.02747v2</id>
-    <updated>2022-10-06T17:58:00Z</updated>
-    <published>2022-10-06T17:58:00Z</published>
-    <title>Flow Matching for Generative Modeling</title>
-    <summary>  A  normalized abstract. </summary>
-    <author><name>Ada Lovelace</name></author>
-    <category term="cs.LG" />
-    <category term="stat.ML" />
-    <link title="pdf" href="https://arxiv.org/pdf/2210.02747v2" />
-  </entry>
-</feed>"""
+
+class FakeArxivLibraryClient:
+    def __init__(self, results: list[arxiv.Result]) -> None:
+        self._results = results
+        self.searches: list[arxiv.Search] = []
+
+    def results(self, search: arxiv.Search) -> Iterator[arxiv.Result]:
+        self.searches.append(search)
+        return iter(self._results)
+
+
+def library_result() -> arxiv.Result:
+    now = datetime(2022, 10, 6, 17, 58, tzinfo=timezone.utc)
+    return arxiv.Result(
+        entry_id="https://arxiv.org/abs/2210.02747v2",
+        title=" Flow Matching for Generative Modeling ",
+        authors=[arxiv.Result.Author("Ada Lovelace")],
+        summary=" A normalized abstract. ",
+        categories=["cs.LG", "stat.ML"],
+        published=now,
+        updated=now,
+        links=[arxiv.Result.Link("https://arxiv.org/pdf/2210.02747v2", title="pdf")],
+    )
 
 
 def planned_state() -> dict[str, object]:
     plan = ArxivSearchPlan(
-        query='all:"flow matching"',
+        keywords=["flow matching", "generative modeling"],
         rationale="测试。",
         categories=["cs.LG", "stat.ML"],
         max_results=5,
@@ -46,21 +55,25 @@ def planned_state() -> dict[str, object]:
     }
 
 
-def mock_client() -> ArxivSearchClient:
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.params["search_query"] == '(all:"flow matching") AND (cat:cs.LG OR cat:stat.ML)'
-        assert request.url.params["max_results"] == "5"
-        return httpx.Response(200, text=ARXIV_FEED)
+def test_library_query_is_built_deterministically_from_semantic_keywords() -> None:
+    plan = ArxivSearchPlan(
+        keywords=["flow matching", "generative modeling", "flow matching"],
+        rationale="测试。",
+        categories=["cs.LG", "stat.ML"],
+    )
 
-    return ArxivSearchClient(transport=httpx.MockTransport(handler), retry_attempts=0)
+    assert build_arxiv_library_query(plan) == (
+        '(all:"flow matching" OR all:"generative modeling") AND (cat:cs.LG OR cat:stat.ML)'
+    )
 
 
 @pytest.mark.asyncio
-async def test_search_arxiv_tool_calls_official_api_and_normalizes_atom_feed() -> None:
-    tool: BaseTool = create_search_arxiv_tool(mock_client())
+async def test_search_arxiv_tool_uses_arxiv_library_and_normalizes_results() -> None:
+    library_client = FakeArxivLibraryClient([library_result()])
+    tool: BaseTool = create_search_arxiv_tool(ArxivSearchClient(client=library_client))
 
     result = await tool.ainvoke(
-        {"query": 'all:"flow matching"', "categories": ["cs.LG", "stat.ML"], "max_results": 5}
+        {"keywords": ["flow matching"], "categories": ["cs.LG"], "max_results": 5}
     )
 
     assert isinstance(result, list)
@@ -68,6 +81,14 @@ async def test_search_arxiv_tool_calls_official_api_and_normalizes_atom_feed() -
     assert result[0]["authors"] == ["Ada Lovelace"]
     assert result[0]["abstract"] == "A normalized abstract."
     assert result[0]["pdf_url"] == "https://arxiv.org/pdf/2210.02747v2"
+    assert library_client.searches[0].query == '(all:"flow matching") AND (cat:cs.LG)'
+
+
+def test_library_query_rejects_raw_api_syntax_in_agent_keywords() -> None:
+    plan = ArxivSearchPlan(keywords=['all:"flow matching"'], rationale="测试。")
+
+    with pytest.raises(ValueError, match="quotes"):
+        build_arxiv_library_query(plan)
 
 
 @pytest.mark.asyncio
